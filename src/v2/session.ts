@@ -117,6 +117,8 @@ export interface SessionConnection {
   ended(session: V2Session): void;
   /** A turn of the session failed for a missing login (`authRequired`). */
   signedOut(sessionId: string): void;
+  /** The session's turn ended with a result: drgnx's `_drgnx/panel` pushes its context breakdown. */
+  turnEnded?(sessionId: string, query: Query): void;
 }
 
 type PendingPrompt = {
@@ -1268,6 +1270,7 @@ export class V2Session implements RequestTarget {
       this.fastModeReported(message, "result");
     }
     this.reports.result(message);
+    if (this.query) this.connection.turnEnded?.(this.sessionId, this.query);
     // Before the result's text below, which can repeat the failed request's.
     this.reportApiError(end);
     // The turn goes on in a fresh context (see `ClearContext`).

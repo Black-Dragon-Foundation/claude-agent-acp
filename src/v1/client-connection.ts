@@ -77,6 +77,17 @@ export class ClientConnection implements AcpClient {
     return this.ctx.notify(method, params);
   }
 
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.ctx.request(method, params, {
+      cancellationSignal: signal,
+      stopWaitingOnCancel: true,
+    });
+  }
+
   mcpServerOverAcp(server: McpServerAcp): Promise<McpHttpServerConfig> {
     return this.mcp.sdkConfig(this.ctx, server);
   }
@@ -138,6 +149,14 @@ export class ChangedMetaClient implements AcpClient {
 
   extNotification(method: string, params: Record<string, unknown>): Promise<void> {
     return this.inner.extNotification(method, params);
+  }
+
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.inner.extRequest(method, params, signal);
   }
 
   mcpServerOverAcp(server: McpServerAcp): Promise<McpHttpServerConfig> {
