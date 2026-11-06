@@ -148,6 +148,7 @@ import {
   clientSupportsAirCapability,
   withAirMeta,
 } from "./air-extension.js";
+import { DRGNX_PANEL_KEY, beforeToolHook, panelCapability, pushContext } from "./drgnx-panel.js";
 import * as sessionIndex from "./session-index/connection.js";
 import type {
   BatchGetSessionsRequest,
@@ -2435,6 +2436,12 @@ export interface AcpClient {
   completeElicitation(params: CompleteElicitationNotification): Promise<void>;
   /** Send a custom (extension) notification, e.g. `_claude/sdkMessage`. */
   extNotification(method: string, params: Record<string, unknown>): Promise<void>;
+  /** Send a custom (extension) request and wait for its answer, e.g. `_drgnx/before_tool`. */
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
 }
 
 /**
@@ -2484,6 +2491,17 @@ class ClientConnection implements AcpClient {
 
   extNotification(method: string, params: Record<string, unknown>): Promise<void> {
     return this.ctx.notify(method, params);
+  }
+
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.ctx.request(method, params, {
+      cancellationSignal: signal,
+      stopWaitingOnCancel: true,
+    });
   }
 }
 
@@ -2536,6 +2554,14 @@ class ChangedMetaClient implements AcpClient {
 
   extNotification(method: string, params: Record<string, unknown>): Promise<void> {
     return this.inner.extNotification(method, params);
+  }
+
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.inner.extRequest(method, params, signal);
   }
 }
 
@@ -3071,6 +3097,10 @@ export class ClaudeAcpAgent {
           // never a status payload. The state itself travels on
           // `_auth/status_update`; there is nothing for a client to ask for.
           authStatus: authStatusCapability(),
+          // drgnx's panel, only for a client that asked for it (`src/drgnx-panel.ts`).
+          ...(panelCapability(request.clientCapabilities)
+            ? { [DRGNX_PANEL_KEY]: panelCapability(request.clientCapabilities) }
+            : {}),
         },
         promptCapabilities: {
           image: true,
@@ -7355,6 +7385,15 @@ export class ClaudeAcpAgent {
 
               session.lastTotalCostUsd = message.total_cost_usd;
               this.sessionIndex.onOwnSessionChanged(params.sessionId);
+              // The hub's context breakdown; not awaited, the control request takes ~1 s.
+              if (panelCapability(this.clientCapabilities)) {
+                void pushContext({
+                  sessionId: params.sessionId,
+                  query: session.query,
+                  client: this.client,
+                  logger: this.logger,
+                });
+              }
               // Send usage_update notification
               if (lastAssistantTotalUsage !== null) {
                 await sendUpdate({
@@ -12292,11 +12331,15 @@ export class ClaudeAcpAgent {
         // On v2, an Edit or Write shows its exact patch before it runs, also
         // when no permission request shows it (`fileChangePreviewHook`): a v2
         // diff cannot hold the input's snippet.
-        ...(this.v2 || subagentConfigHook
+        ...(this.v2 || subagentConfigHook || panelCapability(this.clientCapabilities)
           ? {
               PreToolUse: [
                 ...(userProvidedOptions?.hooks?.PreToolUse || []),
                 ...(subagentConfigHook ? [{ hooks: [subagentConfigHook] }] : []),
+                // `_drgnx/before_tool`: the hub's `before-tool` hooks answer allow or deny.
+                ...(panelCapability(this.clientCapabilities)
+                  ? [{ hooks: [beforeToolHook({ sessionId, client: this.client })] }]
+                  : []),
                 ...(this.v2
                   ? [{ matcher: "Edit|Write", hooks: [this.fileChangePreviewHook(sessionId)] }]
                   : []),
