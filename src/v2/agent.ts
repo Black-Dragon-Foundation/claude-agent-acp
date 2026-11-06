@@ -336,6 +336,20 @@ class V2ClientConnection implements AcpClient {
     return this.ctx.notify(method, params);
   }
 
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    if (!isExtensionMethod(method)) {
+      return Promise.reject(new Error(`${method} is not an ACP extension method`));
+    }
+    return this.ctx.request(method, params, {
+      cancellationSignal: signal,
+      stopWaitingOnCancel: true,
+    });
+  }
+
   async sessionUpdate({ update, ...notification }: AcpSessionNotification): Promise<void> {
     // A subagent that a replay announces replays too, so its messages are
     // cleared before their first replayed chunk, as the parent's are.
