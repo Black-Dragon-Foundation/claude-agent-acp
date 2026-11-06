@@ -149,6 +149,7 @@ import {
   clientSupportsAirCapability,
   withAirMeta,
 } from "../air-extension.js";
+import { DRGNX_PANEL_KEY, beforeToolHook, panelCapability, pushContext } from "../drgnx-panel.js";
 import * as sessionIndex from "./session-index.js";
 import type {
   BatchGetSessionsRequest,
@@ -1858,6 +1859,10 @@ export class ClaudeAcpAgent {
           // never a status payload. The state itself travels on
           // `_auth/status_update`; there is nothing for a client to ask for.
           authStatus: authStatusCapability(),
+          // drgnx's panel, only for a client that asked for it (`src/drgnx-panel.ts`).
+          ...(panelCapability(request.clientCapabilities)
+            ? { [DRGNX_PANEL_KEY]: panelCapability(request.clientCapabilities) }
+            : {}),
         },
         promptCapabilities: {
           image: true,
@@ -5844,6 +5849,15 @@ export class ClaudeAcpAgent {
 
               session.lastTotalCostUsd = message.total_cost_usd;
               this.sessionIndex.onOwnSessionChanged(params.sessionId);
+              // The hub's context breakdown; not awaited, the control request takes ~1 s.
+              if (panelCapability(this.clientCapabilities)) {
+                void pushContext({
+                  sessionId: params.sessionId,
+                  query: session.query,
+                  client: this.client,
+                  logger: this.logger,
+                });
+              }
               // Send usage_update notification
               if (lastAssistantTotalUsage !== null) {
                 await sendUpdate({
@@ -10291,11 +10305,15 @@ export class ClaudeAcpAgent {
               ],
             }
           : {}),
-        ...(subagentConfigHook
+        ...(subagentConfigHook || panelCapability(this.clientCapabilities)
           ? {
               PreToolUse: [
                 ...(userProvidedOptions?.hooks?.PreToolUse || []),
-                { hooks: [subagentConfigHook] },
+                ...(subagentConfigHook ? [{ hooks: [subagentConfigHook] }] : []),
+                // `_drgnx/before_tool`: the hub's `before-tool` hooks answer allow or deny.
+                ...(panelCapability(this.clientCapabilities)
+                  ? [{ hooks: [beforeToolHook({ sessionId, client: this.client })] }]
+                  : []),
               ],
             }
           : {}),

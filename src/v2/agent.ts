@@ -32,6 +32,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import packageJson from "../../package.json" with { type: "json" };
 import { messageIdForGrouping } from "../sdk-to-acp.js";
+import type { AcpClient } from "../acp-client.js";
+import { DRGNX_PANEL_KEY, beforeToolHook, panelCapability, pushContext } from "../drgnx-panel.js";
 import type { Logger } from "../logger.js";
 import { customAgents } from "../session-config-options.js";
 import { restrictedChild } from "../acp-subagents.js";
@@ -317,6 +319,29 @@ class V2Agent implements AgentHandle, SessionConnection {
     return this.ctx.notify(v2.methods.client.elicitation.complete, params);
   }
 
+  /** The client of `_drgnx/panel`: extension notifications and requests on this connection. */
+  private panelClient(): Pick<AcpClient, "extNotification" | "extRequest"> {
+    return {
+      extNotification: (method, params) =>
+        isExtensionMethod(method)
+          ? this.ctx.notify(method, params)
+          : Promise.reject(new Error(`${method} is not an ACP extension method`)),
+      extRequest: (method, params, signal) =>
+        isExtensionMethod(method)
+          ? this.ctx.request(method, params, {
+              cancellationSignal: signal,
+              stopWaitingOnCancel: true,
+            })
+          : Promise.reject(new Error(`${method} is not an ACP extension method`)),
+    };
+  }
+
+  /** The hub's context breakdown after a turn (`_drgnx/panel`); not awaited, it takes ~1 s. */
+  turnEnded(sessionId: string, query: Query): void {
+    if (!panelCapability(this.clientCapabilities)) return;
+    void pushContext({ sessionId, query, client: this.panelClient(), logger: this.logger });
+  }
+
   ended(session: V2Session): void {
     // The old query of a restart that replaced it already.
     if (this.sessions.get(session.sessionId) !== session) return;
@@ -366,7 +391,14 @@ class V2Agent implements AgentHandle, SessionConnection {
         providers: {},
         auth,
         // A prompt that comes while Claude works waits in Claude Code's queue.
-        _meta: { claudeCode: { promptQueueing: true }, ..._meta },
+        _meta: {
+          claudeCode: { promptQueueing: true },
+          ..._meta,
+          // drgnx's panel, only for a client that asked for it (`src/drgnx-panel.ts`).
+          ...(panelCapability(request.capabilities)
+            ? { [DRGNX_PANEL_KEY]: panelCapability(request.capabilities) }
+            : {}),
+        },
       },
       authMethods,
     };
@@ -1150,7 +1182,14 @@ class V2Agent implements AgentHandle, SessionConnection {
         SubagentStop: [subagent.SubagentStop],
         PostToolUseFailure: [subagent.PostToolUseFailure],
         // An Edit or Write shows its exact patch before it runs.
-        PreToolUse: [subagent.PreToolUse, fileChangePreviewHook(session, this.logger)],
+        PreToolUse: [
+          subagent.PreToolUse,
+          fileChangePreviewHook(session, this.logger),
+          // `_drgnx/before_tool`: the hub's `before-tool` hooks answer allow or deny.
+          ...(panelCapability(this.clientCapabilities)
+            ? [{ hooks: [beforeToolHook({ sessionId, client: this.panelClient() })] }]
+            : []),
+        ],
         PostToolUse: [
           subagent.PostToolUse,
           {
@@ -1345,4 +1384,8 @@ function listOffset(cursor: string | null | undefined): number {
   if (!match)
     throw RequestError.invalidParams({ cursor }, `Unknown session/list cursor: ${cursor}`);
   return Number(match[1]);
+}
+
+function isExtensionMethod(method: string): method is v2.ExtensionMethod {
+  return method.startsWith("_");
 }
