@@ -45,6 +45,12 @@ export interface AcpClient {
   authStatusUpdate(params: AuthStatusUpdateNotification): Promise<void>;
   /** Send a custom (extension) notification, e.g. `_claude/sdkMessage`. */
   extNotification(method: string, params: Record<string, unknown>): Promise<void>;
+  /** Send a custom (extension) request and wait for its answer, e.g. `_drgnx/before_tool`. */
+  extRequest(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
   /**
    * The SDK config of an MCP server that the client serves over this
    * connection (`"type": "acp"`): an endpoint that sends each MCP request to
